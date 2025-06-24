@@ -11,6 +11,7 @@ from typing import Dict
 from telethon import TelegramClient, events
 from telethon.tl.types import MessageMediaWebPage
 from dotenv import load_dotenv
+from system_prompt_manager import load_configured_system_prompt
 
 load_dotenv()
 
@@ -41,6 +42,9 @@ OPENAI_API_KEY = os.environ['OPENAI_API_KEY']
 SESSION_NAME = os.environ.get('SESSION_NAME', 'aggregator')
 
 openai_client = openai.AsyncOpenAI(api_key=OPENAI_API_KEY)
+
+# Global variable to store the system prompt
+SYSTEM_PROMPT = None
 
 def init_db(db_path='processed_messages.db'):
     conn = sqlite3.connect(db_path)
@@ -81,37 +85,15 @@ def save_editor_decision(conn, channel, message_id, original_text, decision_json
                      VALUES (?, ?, ?, ?, ?)''', (channel, message_id, original_text, decision_json, timestamp))
     conn.commit()
 
-async def ai_editor_in_chief(text: str) -> Dict[str, str] | None:
-    system_prompt = """
-    You are an AI agent acting as an editor-in-chief of a curated international news channel. Your task is to evaluate news items from various sources and decide whether each item should be reposted to the audience of the channel.
 
-    Here are your responsibilities:
-    
-    1. **Translation**: News items may be in different languages. Always translate them into fluent, clear English. If the original message includes any **links** to websites or other telegram chats or channels, they must be preserved and included in the translated version. All links must be included.
-    2. **Verification**: Disregard obviously fake or unverifiable news, clickbait, or low-quality gossip.
-    3. **Advertisement Filtering**: If the item is a commercial advertisement or marketing content—**reject** it.
-    4. **Product Promo**: If the item is promotion of AI product **repost** it.
-    5. **Event Relevance**: Only include events if they are international or relevant to audiences in the US, Europe, or Asia. Local events should be **excluded**, unless they have global significance.
-    6. **Geopolitical Filter**: Exclude any content that promotes organizations or events from countries under active international sanctions, such as Russia (unless the news is critically important and globally covered).
-    7. **Editorial Judgment**: Prioritize news that is informative, globally relevant, and of high journalistic quality. Prefer original reporting over reposts or aggregations.
-    8. **Repost Decision**: At the end, decide whether the news should be **reposted** or **rejected**, and explain why in 1–2 sentences.
-    
-    Be strict and professional in your decisions. The goal is to maintain a high-quality international feed for an informed audience.
-    
-    Format your response in the following structure in JSON format:
-    
-    Original Language: [Detected language]
-    Translated News: [English translation]
-    Content Type: [e.g. Political News, Product Promo, Local Event, Global Event, Social Post, etc.]
-    Decision: [REPOST or REJECT]
-    Reasoning: [Concise editorial justification]
-    
-    """
+async def ai_editor_in_chief(text: str) -> Dict[str, str] | None:
+    # Use the globally loaded system prompt
+    global SYSTEM_PROMPT
 
     response = await openai_client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": text},
         ],
     )
@@ -153,6 +135,11 @@ async def forward_message_with_media(client, original_message, translated_text, 
 
 
 async def main():
+    # Initialize system prompt at startup
+    global SYSTEM_PROMPT
+    SYSTEM_PROMPT = load_configured_system_prompt()
+    logger.info(f"System prompt successfully loaded and configured:\n{SYSTEM_PROMPT}")
+    
     client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
     await client.start()
 
